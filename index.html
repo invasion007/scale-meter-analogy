@@ -1,0 +1,768 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>杆秤 · 电压表 · 电流表：同一个"以小测大"</title>
+<style>
+  /* C 基调 · 白底实物风格（风格与技术路线.md v4.0） */
+  *{box-sizing:border-box;margin:0;padding:0;}
+  html,body{height:100%;overflow:hidden;}
+  body{
+    font-family:"Microsoft YaHei","PingFang SC","Noto Sans SC","WenQuanYi Zen Hei",sans-serif;
+    background:linear-gradient(135deg,#f5f7fa 0%,#e4edf9 100%);
+    color:#333;
+  }
+  #stage{position:absolute;left:0;top:0;width:1920px;height:1080px;transform-origin:0 0;}
+  body.narrow{overflow-y:auto;overflow-x:hidden;}
+  body.narrow #stage{position:relative;}
+  #rotTip{display:none;position:fixed;left:50%;top:calc(50% + 40px);transform:translateX(-50%);
+    background:rgba(51,51,51,.88);color:#fff;font-size:14px;padding:8px 16px;border-radius:20px;
+    z-index:99;white-space:nowrap;}
+
+  header{position:absolute;left:0;top:0;width:1920px;height:56px;
+    background:rgba(255,255,255,.95);border-radius:0 0 12px 12px;
+    box-shadow:0 4px 15px rgba(0,0,0,.08);
+    display:flex;align-items:center;gap:14px;padding:0 22px;}
+  header h1{font-size:19px;font-weight:700;color:#333;letter-spacing:.4px;white-space:nowrap;}
+  header .sub{font-size:13.5px;color:#90a4ae;border-left:1px solid #dde2e9;padding-left:14px;white-space:nowrap;}
+  header .sp{flex:1;}
+  header .stepn{font-size:14px;color:#90a4ae;font-variant-numeric:tabular-nums;}
+
+  nav{position:absolute;left:0;top:62px;width:1920px;height:40px;display:flex;align-items:center;gap:8px;padding:0 22px;}
+  nav .gl{font-size:12px;color:#90a4ae;letter-spacing:1px;font-weight:700;margin-right:2px;}
+  nav button{font-family:inherit;font-size:13.5px;color:#546e7a;background:#fff;border:1px solid #dde2e9;
+    border-radius:8px;padding:6px 14px;cursor:pointer;white-space:nowrap;transition:all .16s;}
+  nav button:hover{border-color:#3498db;background:#f1f7ff;}
+  nav button.on{background:#3498db;border-color:#3498db;color:#fff;font-weight:700;}
+
+  canvas{position:absolute;left:0;top:108px;width:1920px;height:900px;display:block;}
+
+  footer{position:absolute;left:0;top:1012px;width:1920px;height:68px;
+    background:#fff;border-radius:12px 12px 0 0;box-shadow:0 -4px 15px rgba(0,0,0,.06);
+    display:flex;align-items:center;gap:18px;padding:0 22px;}
+  .hint{font-size:15px;color:#1565c0;background:#eef5fd;border:1px solid #d7e5f7;
+    border-radius:10px;padding:7px 16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;}
+  .hint b{color:#c0392b;}
+  .slwrap{display:flex;align-items:center;gap:10px;}
+  .slwrap label{font-size:14px;color:#546e7a;white-space:nowrap;}
+  input[type=range]{width:300px;height:8px;-webkit-appearance:none;appearance:none;
+    background:#e0e7ef;border-radius:4px;outline:none;cursor:pointer;}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:24px;height:24px;border-radius:50%;
+    background:#3498db;border:3px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.25);cursor:pointer;}
+  input[type=range]::-moz-range-thumb{width:18px;height:18px;border-radius:50%;background:#3498db;
+    border:3px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.25);cursor:pointer;}
+  .kval{font-family:"Courier New",monospace;font-size:22px;font-weight:700;color:#297fb8;
+    min-width:66px;text-align:right;font-variant-numeric:tabular-nums;}
+  .kval span{font-size:13px;color:#90a4ae;font-weight:400;}
+  footer button{font-family:inherit;font-size:14px;color:#fff;background:#3498db;border:none;
+    border-radius:8px;padding:9px 18px;cursor:pointer;white-space:nowrap;}
+  footer button:hover{background:#2980b9;}
+  footer button.ghost{background:#fff;color:#546e7a;border:1px solid #dde2e9;}
+  footer button.ghost:hover{background:#f1f7ff;border-color:#3498db;}
+</style>
+</head>
+<body>
+<div id="stage">
+  <header>
+    <h1>杆秤 · 电压表 · 电流表</h1>
+    <span class="sub">同一个套路：用小量 × 一个比例，读出大量</span>
+    <span class="sp"></span>
+    <span class="stepn" id="stepn">1 / 5</span>
+  </header>
+  <nav id="toc"></nav>
+  <canvas id="cv" width="1920" height="900"></canvas>
+  <footer>
+    <div class="hint" id="hint">—</div>
+    <div class="slwrap">
+      <label>放大倍数 k</label>
+      <input type="range" id="kRange" min="5" max="60" step="1" value="30">
+      <div class="kval" id="kVal">30<span>×</span></div>
+    </div>
+    <button class="ghost" id="btnPrev">◀ 上一步</button>
+    <button id="btnNext">下一步 ▶</button>
+  </footer>
+</div>
+<div id="rotTip">屏幕太小：建议横屏，或改用电脑 / 投影观看</div>
+<script>
+
+(function (g) {
+'use strict';
+
+var HEAD = { Ig: 1e-3, Rg: 100 };
+HEAD.Ug = HEAD.Ig * HEAD.Rg;
+
+function vRange(Rs) { return HEAD.Ig * (HEAD.Rg + Rs); }
+function vFactor(Rs) { return (HEAD.Rg + Rs) / HEAD.Rg; }
+function vNeed(U) { return U / HEAD.Ig - HEAD.Rg; }
+function vSplit(U, Rs) {
+var R = HEAD.Rg + Rs, I = U / R;
+return {
+I: I, Uhead: I * HEAD.Rg, User: I * Rs,
+frac: I / HEAD.Ig,
+shareHead: HEAD.Rg / R, shareSer: Rs / R
+};
+}
+
+function aRange(Rp) { return HEAD.Ig * (1 + HEAD.Rg / Rp); }
+function aFactor(Rp) { return 1 + HEAD.Rg / Rp; }
+function aNeed(I) { return (HEAD.Ig * HEAD.Rg) / (I - HEAD.Ig); }
+function aSplit(I, Rp) {
+var Rpar = (HEAD.Rg * Rp) / (HEAD.Rg + Rp), V = I * Rpar;
+var Ih = V / HEAD.Rg, Ip = V / Rp;
+return {
+V: V, Ihead: Ih, Ishunt: Ip,
+frac: Ih / HEAD.Ig,
+shareHead: Rp / (HEAD.Rg + Rp), shareShunt: HEAD.Rg / (HEAD.Rg + Rp)
+};
+}
+
+function syMass(m, L1, L2) { return (m * L2) / L1; }
+function syFactor(L1, L2) { return L2 / L1; }
+
+function runSelfTest() {
+var cases = [], fail = 0;
+function ck(name, got, want, tol) {
+tol = tol == null ? 1e-9 : tol;
+var ok = Math.abs(got - want) <= tol * Math.max(1, Math.abs(want));
+if (!ok) fail++;
+cases.push({ name: name, got: got, want: want, ok: ok });
+}
+ck('Ug = Ig·Rg', HEAD.Ug, 0.1);
+ck('电压表 Rs(3V)', vNeed(3), 2900, 1e-12);
+ck('电压表量程(2900)', vRange(2900), 3);
+ck('电压表倍数(2900)', vFactor(2900), 30);
+var s = vSplit(3, 2900);
+ck('分压·表头', s.Uhead, 0.1);
+ck('分压·电阻', s.User, 2.9);
+ck('分压·份额', s.shareHead, 1 / 30);
+ck('分压·满偏', s.frac, 1);
+var Rp = aNeed(0.6);
+ck('电流表 Rp(0.6A)', Rp, 0.1 / 0.599, 1e-9);
+ck('电流表倍数', aFactor(Rp), 600, 1e-9);
+ck('电流表量程', aRange(Rp), 0.6, 1e-9);
+var a = aSplit(0.6, Rp);
+ck('分流·表头', a.Ihead, 1e-3, 1e-6);
+ck('分流·满偏', a.frac, 1, 1e-6);
+ck('分流·份额', a.shareHead, 1 / 600, 1e-6);
+ck('边界 U=0', vSplit(0, 1000).frac, 0);
+ck('边界 Rs=0', vFactor(0), 1);
+ck('杆秤 30 倍', syFactor(40, 1200), 30);
+ck('杆秤 质量', syMass(1, 40, 1200), 30);
+return { pass: fail === 0, failed: fail, total: cases.length, cases: cases };
+}
+
+g.PHY = {
+HEAD: HEAD,
+vRange: vRange, vFactor: vFactor, vNeed: vNeed, vSplit: vSplit,
+aRange: aRange, aFactor: aFactor, aNeed: aNeed, aSplit: aSplit,
+syMass: syMass, syFactor: syFactor, runSelfTest: runSelfTest
+};
+})(window);
+
+</script>
+<script>
+
+(function (g) {
+'use strict';
+
+var FONT = '"Microsoft YaHei","PingFang SC","Noto Sans SC","WenQuanYi Zen Hei",sans-serif';
+
+var C = {
+ink: '#333', sub: '#546e7a', weak: '#90a4ae', dark: '#333',
+line: '#dde2e9', soft: '#e9f0f9',
+blue: '#3498db', blueD: '#297fb8', blueL: '#eef5fd', blueB: '#d7e5f7', blueT: '#1565c0',
+red: '#c0392b', redL: 'rgba(192,57,43,.10)',
+org: '#e67e22', orgL: 'rgba(230,126,34,.12)',
+s1: '#e0e0e0', s2: '#ffffff', s3: '#b0b0b0'
+};
+
+function T(ctx, s, x, y, o) {
+o = o || {};
+ctx.save();
+ctx.font = (o.w || 400) + ' ' + (o.s || 16) + 'px ' + (o.f || FONT);
+ctx.fillStyle = o.c || C.ink;
+ctx.textAlign = o.a || 'left';
+ctx.textBaseline = o.b || 'alphabetic';
+ctx.fillText(s, x, y);
+ctx.restore();
+}
+function tw(ctx, s, o) {
+o = o || {};
+ctx.save();
+ctx.font = (o.w || 400) + ' ' + (o.s || 16) + 'px ' + (o.f || FONT);
+var w = ctx.measureText(s).width;
+ctx.restore();
+return w;
+}
+function rr(ctx, x, y, w, h, r) {
+r = Math.max(0, Math.min(r, Math.abs(w) / 2, Math.abs(h) / 2));
+ctx.beginPath();
+ctx.moveTo(x + r, y);
+ctx.arcTo(x + w, y, x + w, y + h, r);
+ctx.arcTo(x + w, y + h, x, y + h, r);
+ctx.arcTo(x, y + h, x, y, r);
+ctx.arcTo(x, y, x + w, y, r);
+ctx.closePath();
+}
+function line(ctx, x1, y1, x2, y2, c, w, dash) {
+ctx.save();
+ctx.strokeStyle = c; ctx.lineWidth = w || 2; ctx.lineCap = 'round';
+if (dash) ctx.setLineDash(dash);
+ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+ctx.restore();
+}
+function arrow(ctx, x1, y1, x2, y2, c, w, hs) {
+w = w || 3; hs = hs || w * 4;
+var a = Math.atan2(y2 - y1, x2 - x1);
+ctx.save();
+ctx.strokeStyle = c; ctx.fillStyle = c; ctx.lineWidth = w; ctx.lineCap = 'round';
+ctx.beginPath(); ctx.moveTo(x1, y1);
+ctx.lineTo(x2 - Math.cos(a) * hs * 0.85, y2 - Math.sin(a) * hs * 0.85); ctx.stroke();
+ctx.beginPath();
+ctx.moveTo(x2, y2);
+ctx.lineTo(x2 - hs * Math.cos(a - 0.42), y2 - hs * Math.sin(a - 0.42));
+ctx.lineTo(x2 - hs * Math.cos(a + 0.42), y2 - hs * Math.sin(a + 0.42));
+ctx.closePath(); ctx.fill();
+ctx.restore();
+}
+function dot(ctx, x, y, r, c) {
+ctx.save(); ctx.fillStyle = c; ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fill(); ctx.restore();
+}
+
+function dim(ctx, x1, x2, y, c, w, ext) {
+c = c || C.org; w = w || 2; ext = ext == null ? 8 : ext;
+line(ctx, x1, y, x2, y, c, w);
+arrow(ctx, x1 + 1, y, x1 + Math.min(24, Math.abs(x2 - x1) * 0.4), y, c, w, 9);
+arrow(ctx, x2 - 1, y, x2 - Math.min(24, Math.abs(x2 - x1) * 0.4), y, c, w, 9);
+if (ext) { line(ctx, x1, y - ext, x1, y + ext, c, 1.6); line(ctx, x2, y - ext, x2, y + ext, c, 1.6); }
+}
+
+function head(ctx, kicker, title, sub) {
+T(ctx, kicker, 56, 40, { s: 15, w: 700, c: C.weak });
+var kw = tw(ctx, kicker, { s: 15, w: 700 });
+T(ctx, title, 56 + kw + 18, 42, { s: 28, w: 700, c: C.ink });
+if (sub) T(ctx, sub, 1864, 41, { s: 18, w: 700, c: C.blueD, a: 'right' });
+}
+
+function fmt(v, n) {
+if (v == null || !isFinite(v)) return '—';
+return Number(v).toFixed(n == null ? 2 : n);
+}
+function sig(v, s) {
+if (v == null || !isFinite(v)) return '—';
+if (v === 0) return '0';
+var d = Math.max(0, s - 1 - Math.floor(Math.log10(Math.abs(v))));
+return Number(v).toFixed(Math.min(6, d));
+}
+
+function cards(ctx, A, B, D) {
+var y = 706, h = 166, w = 576, gap = 36, x0 = 56;
+card(ctx, x0, y, w, h, A);
+card(ctx, x0 + w + gap, y, w, h, B);
+card(ctx, x0 + 2 * (w + gap), y, w, h, D);
+}
+function card(ctx, x, y, w, h, o) {
+ctx.save();
+ctx.shadowColor = 'rgba(0,0,0,.09)'; ctx.shadowBlur = 22; ctx.shadowOffsetY = 8;
+rr(ctx, x, y, w, h, 16); ctx.fillStyle = '#fff'; ctx.fill();
+ctx.restore();
+rr(ctx, x, y, w, h, 16); ctx.strokeStyle = C.line; ctx.lineWidth = 2; ctx.stroke();
+ctx.save(); ctx.fillStyle = o.c; rr(ctx, x, y + 12, 8, h - 24, 4); ctx.fill(); ctx.restore();
+T(ctx, o.lab, x + 30, y + 40, { s: 17, w: 700, c: C.sub });
+if (o.sub) T(ctx, o.sub, x + w - 24, y + 40, { s: 14.5, c: C.weak, a: 'right' });
+var vs = String(o.val);
+T(ctx, vs, x + 30, y + h - 30, { s: 62, w: 700, c: o.c });
+if (o.unit) {
+var vw = tw(ctx, vs, { s: 62, w: 700 });
+T(ctx, o.unit, x + 30 + vw + 10, y + h - 34, { s: 24, w: 700, c: o.c });
+}
+}
+
+function shareBar(ctx, x, y, w, h, share, bigLab, smallLab) {
+var wS = Math.max(w * share, 14);
+ctx.save(); rr(ctx, x, y, w, h, 10); ctx.fillStyle = C.blueB; ctx.fill(); ctx.restore();
+if (wS < w - 4) {
+ctx.save(); rr(ctx, x + wS + 2, y + 2, w - wS - 4, h - 4, 8);
+ctx.fillStyle = C.blue; ctx.fill(); ctx.restore();
+T(ctx, bigLab, x + wS + 30, y + h / 2 + 10, { s: 25, w: 700, c: '#fff' });
+}
+ctx.save();
+ctx.beginPath();
+var r = 10;
+ctx.moveTo(x + r, y); ctx.lineTo(x + wS, y); ctx.lineTo(x + wS, y + h);
+ctx.lineTo(x + r, y + h); ctx.arcTo(x, y + h, x, y + h - r, r);
+ctx.lineTo(x, y + r); ctx.arcTo(x, y, x + r, y, r); ctx.closePath();
+ctx.fillStyle = C.red; ctx.fill(); ctx.restore();
+rr(ctx, x, y, w, h, 10); ctx.strokeStyle = C.blueD; ctx.lineWidth = 2; ctx.stroke();
+return wS;
+}
+
+function dial(ctx, cx, cy, R, frac, opt) {
+opt = opt || {};
+ctx.save();
+ctx.shadowColor = 'rgba(0,0,0,.12)'; ctx.shadowBlur = 24; ctx.shadowOffsetY = 9;
+ctx.beginPath(); ctx.arc(cx, cy, R, 0, 7); ctx.fillStyle = '#fff'; ctx.fill();
+ctx.restore();
+ctx.beginPath(); ctx.arc(cx, cy, R, 0, 7); ctx.strokeStyle = '#dde2e9'; ctx.lineWidth = R * 0.035; ctx.stroke();
+ctx.beginPath(); ctx.arc(cx, cy, R * 0.93, 0, 7); ctx.strokeStyle = C.soft; ctx.lineWidth = 1.5; ctx.stroke();
+
+var A0 = Math.PI * 0.86, A1 = Math.PI * 0.14;
+function ang(f) { return A0 + (A1 - A0) * f; }
+function px(f, q) { return cx + Math.cos(ang(f)) * q; }
+function py(f, q) { return cy - Math.sin(ang(f)) * q; }
+
+for (var i = 0; i <= 20; i++) {
+var f = i / 20, maj = (i % 5 === 0);
+var r1 = R * 0.88, r2 = R * (maj ? 0.74 : 0.81);
+line(ctx, px(f, r1), py(f, r1), px(f, r2), py(f, r2), maj ? C.dark : '#90a4ae', maj ? R * 0.012 : R * 0.006);
+}
+
+if (opt.arcLabels) {
+var e0 = ang(0), e1 = ang(1);
+ctx.save(); ctx.fillStyle = C.sub;
+ctx.beginPath();
+ctx.moveTo(cx + Math.cos(e0) * R * 1.0, cy - Math.sin(e0) * R * 1.0);
+ctx.lineTo(cx + Math.cos(e0 + 0.10) * R * 0.90, cy - Math.sin(e0 + 0.10) * R * 0.90);
+ctx.lineTo(cx + Math.cos(e0 - 0.10) * R * 0.90, cy - Math.sin(e0 - 0.10) * R * 0.90);
+ctx.closePath(); ctx.fill();
+ctx.fillStyle = C.red;
+ctx.beginPath();
+ctx.moveTo(cx + Math.cos(e1) * R * 1.0, cy - Math.sin(e1) * R * 1.0);
+ctx.lineTo(cx + Math.cos(e1 + 0.10) * R * 0.90, cy - Math.sin(e1 + 0.10) * R * 0.90);
+ctx.lineTo(cx + Math.cos(e1 - 0.10) * R * 0.90, cy - Math.sin(e1 - 0.10) * R * 0.90);
+ctx.closePath(); ctx.fill();
+ctx.restore();
+}
+
+var nx = px(frac, R * 0.80), ny = py(frac, R * 0.80);
+ctx.save();
+ctx.strokeStyle = C.red; ctx.lineWidth = R * 0.028; ctx.lineCap = 'round';
+ctx.shadowColor = 'rgba(192,57,43,.3)'; ctx.shadowBlur = 10;
+ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(nx, ny); ctx.stroke();
+ctx.restore();
+dot(ctx, cx, cy, R * 0.05, C.red);
+dot(ctx, cx, cy, R * 0.022, '#fff');
+
+if (opt.name) T(ctx, opt.name, cx, cy + R * 0.44, { s: R * 0.20, w: 700, c: C.ink, a: 'center' });
+if (opt.note) T(ctx, opt.note, cx, cy + R * 0.66, { s: opt.noteSize || R * 0.10, c: C.weak, a: 'center' });
+}
+
+function scene1(ctx, st) {
+var k = st.k;
+var beamY = 370, F = 175, L1 = 25, H = 146, L2 = L1 * k, xk = F + L2;
+head(ctx, '第 1 幕', '一杆秤：1 kg 的砣，凭什么读出 ' + k + ' kg？', '力矩平衡　m · L₂ = M · L₁');
+
+ctx.save();
+var gr = ctx.createLinearGradient(0, beamY - 20, 0, beamY + 20);
+gr.addColorStop(0, C.s1); gr.addColorStop(.40, C.s2); gr.addColorStop(.60, C.s2); gr.addColorStop(1, C.s3);
+ctx.beginPath();
+ctx.moveTo(128, beamY - 21); ctx.lineTo(1872, beamY - 6);
+ctx.lineTo(1872, beamY + 6); ctx.lineTo(128, beamY + 21);
+ctx.closePath(); ctx.fillStyle = gr; ctx.fill();
+ctx.strokeStyle = C.s3; ctx.lineWidth = 2; ctx.stroke();
+ctx.restore();
+
+for (var n = 1; n <= 60; n++) {
+var tx = F + L1 * n, big = (n % 10 === 0), mid = (n % 5 === 0);
+line(ctx, tx, beamY + 10, tx, beamY + (big ? 38 : mid ? 28 : 18), big ? C.dark : C.weak, big ? 2.4 : 1.4);
+if (big) T(ctx, n, tx, beamY - 36, { s: 17, w: 700, c: C.sub, a: 'center' });
+}
+
+line(ctx, F, beamY - 21, F, beamY - 104, C.weak, 6);
+ctx.save(); ctx.beginPath(); ctx.arc(F, beamY - 120, 18, 0, 7);
+ctx.strokeStyle = C.weak; ctx.lineWidth = 7; ctx.stroke(); ctx.restore();
+T(ctx, '提纽 = 支点', F + 34, beamY - 112, { s: 18, w: 700, c: C.sub });
+
+line(ctx, H, beamY + 21, H, 486, C.sub, 6);
+ctx.save();
+ctx.shadowColor = 'rgba(41,127,184,.22)'; ctx.shadowBlur = 22; ctx.shadowOffsetY = 8;
+rr(ctx, H - 70, 486, 140, 150, 13); ctx.fillStyle = C.blueD; ctx.fill();
+ctx.restore();
+T(ctx, 'M', H, 526, { s: 26, w: 700, c: '#ffffff', a: 'center' });
+T(ctx, k + ' kg', H, 588, { s: 44, w: 700, c: '#ffffff', a: 'center' });
+T(ctx, '待称的重物', H, 620, { s: 15, c: C.blueB, a: 'center' });
+
+line(ctx, xk, beamY + 21, xk, 480, C.sub, 6);
+ctx.save();
+ctx.beginPath();
+ctx.moveTo(xk - 21, 480); ctx.lineTo(xk + 21, 480);
+ctx.lineTo(xk + 35, 580); ctx.lineTo(xk - 35, 580);
+ctx.closePath(); ctx.fillStyle = C.red; ctx.fill();
+ctx.restore();
+T(ctx, '砣', xk, 540, { s: 27, w: 700, c: '#ffffff', a: 'center' });
+T(ctx, '1 kg', xk, 616, { s: 23, w: 700, c: C.red, a: 'center' });
+
+ctx.save();
+ctx.strokeStyle = C.org; ctx.lineWidth = 2.8; ctx.lineCap = 'round';
+ctx.beginPath(); ctx.moveTo(H, 424); ctx.lineTo(H, 446); ctx.stroke();
+ctx.beginPath(); ctx.moveTo(F, 424); ctx.lineTo(F, 446); ctx.stroke();
+ctx.beginPath(); ctx.moveTo(H, 435); ctx.lineTo(F, 435); ctx.stroke();
+ctx.restore();
+
+T(ctx, 'L₁', (H + F) / 2 + 26, 458, { s: 19, w: 700, c: C.org });
+
+dim(ctx, F, xk, 196, C.org, 2.8, 10);
+T(ctx, 'L₂ = ' + sig(L2, 3) + '　（L₁ 的 ' + k + ' 倍）', (F + xk) / 2, 170,
+{ s: 23, w: 700, c: C.org, a: 'center' });
+T(ctx, '短臂 L₁ 固定不动，只有长臂 L₂ 在变', 1862, 302,
+{ s: 17.5, c: C.weak, a: 'right' });
+T(ctx, '砣往右滑，读数就变大 →', 1480, 246, { s: 17, c: C.weak, a: 'center' });
+
+cards(ctx,
+{ lab: '只认识的小量', val: '1', unit: 'kg（砣）', c: C.red, sub: '砣只有一个' },
+{ lab: '放大倍数　k = L₂ / L₁', val: k, unit: '×', c: C.org, sub: '拖底部滑杆' },
+{ lab: '秤杆读出来的大量', val: k, unit: 'kg', c: C.blueD, sub: 'M = m × k' });
+}
+
+function scene2(ctx, st) {
+head(ctx, '第 2 幕', '表头：一只只会喊"满偏了"的小表', 'Ig = 1 mA　Rg = 100 Ω');
+
+dial(ctx, 470, 380, 250, 1, {
+name: '表头 G', note: '0  →  满偏 = 1 mA', noteSize: 22, arcLabels: true
+});
+
+var x = 830, y0 = 108, w = 1030, h = 156, gap = 24;
+card(ctx, x, y0, w, h, { lab: '满偏电流　Ig', val: '1', unit: 'mA', c: C.red, sub: '指针能走到的最远处' });
+card(ctx, x, y0 + h + gap, w, h, { lab: '内阻　Rg', val: '100', unit: 'Ω', c: C.sub, sub: '线圈自己的电阻' });
+card(ctx, x, y0 + 2 * (h + gap), w, h,
+{ lab: '满偏电压　Ug = Ig · Rg', val: '0.1', unit: 'V', c: C.org, sub: '它最多能"扛"的电压' });
+
+var by = 706;
+ctx.save();
+ctx.shadowColor = 'rgba(0,0,0,.09)'; ctx.shadowBlur = 22; ctx.shadowOffsetY = 8;
+rr(ctx, 56, by, 1808, 166, 16); ctx.fillStyle = '#fff'; ctx.fill(); ctx.restore();
+rr(ctx, 56, by, 1808, 166, 16); ctx.strokeStyle = C.line; ctx.lineWidth = 2; ctx.stroke();
+
+var t1 = '它天生只能测 0.1 V、1 mA。';
+T(ctx, t1, 96, by + 62, { s: 30, w: 700, c: C.ink });
+var x1 = 96 + tw(ctx, t1, { s: 30, w: 700 }) + 14;
+T(ctx, '要测 3 V，差 30 倍；', x1, by + 62, { s: 30, c: C.sub });
+T(ctx, '要测 0.6 A，差 600 倍。', x1 + tw(ctx, '要测 3 V，差 30 倍；', { s: 30 }) + 8, by + 62,
+{ s: 30, w: 700, c: C.org });
+T(ctx, '下一幕：给它配一个"帮手"，让它自己只留一小份，把多的那份分出去。', 96, by + 122,
+{ s: 26, c: C.ink });
+}
+
+function scene3(ctx, st) {
+var k = st.k, Rs = 100 * (k - 1), U = 0.1 * k, URs = U * (k - 1) / k;
+head(ctx, '第 3 幕', '电压表：把 ' + (k - 1) + '/' + k + ' 的电压交给串联电阻', '串联分压　U = Ig(Rg + Rs)');
+
+var bx = 110, by = 92, bw = 1760, bh = 74;
+T(ctx, '总电压 U = ' + fmt(U, 2) + ' V　—— 全部压在这一条上', bx, by - 14, { s: 22, w: 700, c: C.ink });
+var wS = shareBar(ctx, bx, by, bw, bh, 1 / k,
+'串联电阻 Rs 分走 ' + fmt(URs, 2) + ' V　（' + (k - 1) + '/' + k + '）');
+var lx = bx + wS / 2;
+line(ctx, lx, by + bh, lx, by + bh + 26, C.red, 2, [6, 5]);
+line(ctx, lx, by + bh + 26, bx + wS + 26, by + bh + 26, C.red, 2);
+T(ctx, '表头只分到 0.10 V　（1/' + k + '）', bx + wS + 34, by + bh + 20,
+{ s: 23, w: 700, c: C.red });
+
+var L = 150, R = 1610, ty = 372, byy = 596;
+var cxh = 520, cxr = 1060;
+
+ctx.save(); ctx.setLineDash([11, 8]); ctx.strokeStyle = C.org; ctx.lineWidth = 2.4;
+rr(ctx, cxh - 152, ty - 130, (cxr + 156) - (cxh - 152), 258, 16); ctx.stroke(); ctx.restore();
+T(ctx, '这两件串起来 = 一只 ' + fmt(U, 2) + ' V 的电压表', cxh - 152, ty - 148,
+{ s: 20, w: 700, c: C.org });
+
+line(ctx, L, ty, R, ty, C.ink, 4);
+line(ctx, R, ty, R, byy, C.ink, 4);
+line(ctx, R, byy, L, byy, C.ink, 4);
+line(ctx, L, byy, L, ty, C.ink, 4);
+
+ctx.save(); ctx.fillStyle = '#fff'; rr(ctx, L - 38, 442, 76, 84, 8); ctx.fill();
+ctx.strokeStyle = C.ink; ctx.lineWidth = 3; ctx.stroke(); ctx.restore();
+line(ctx, L - 18, 462, L + 18, 462, C.ink, 5);
+line(ctx, L - 10, 488, L + 10, 488, C.ink, 5);
+T(ctx, 'U', L - 60, 496, { s: 32, w: 700, c: C.org, a: 'right' });
+
+var dR = 64;
+ctx.save(); ctx.fillStyle = '#fff';
+ctx.beginPath(); ctx.arc(cxh, ty, dR + 8, 0, 7); ctx.fill(); ctx.restore();
+dial(ctx, cxh, ty, dR, 1, { name: 'G', note: 'Rg = 100 Ω', noteSize: 13 });
+
+ctx.save(); ctx.fillStyle = '#fff'; ctx.fillRect(cxr - 132, ty - 44, 264, 88); ctx.restore();
+rr(ctx, cxr - 128, ty - 38, 256, 76, 12); ctx.fillStyle = '#fff'; ctx.fill();
+ctx.strokeStyle = C.blueD; ctx.lineWidth = 4.5; ctx.stroke();
+T(ctx, 'Rs', cxr, ty - 2, { s: 34, w: 700, c: C.blueD, a: 'center' });
+T(ctx, sig(Rs, 4) + ' Ω', cxr, ty + 28, { s: 19, w: 700, c: C.blueD, a: 'center' });
+
+arrow(ctx, 1240, ty - 66, 1420, ty - 66, C.ink, 3.4, 14);
+T(ctx, '同一股电流　I = 1 mA', 1436, ty - 59, { s: 20, w: 700, c: C.ink });
+
+dim(ctx, cxh - dR - 4, cxh + dR + 4, ty - 92, C.red, 2.2, 7);
+T(ctx, 'Ug = 0.10 V', cxh, ty - 106, { s: 21, w: 700, c: C.red, a: 'center' });
+dim(ctx, cxr - 128, cxr + 128, ty - 92, C.blueD, 2.2, 7);
+T(ctx, 'URs = ' + fmt(URs, 2) + ' V', cxr, ty - 106, { s: 21, w: 700, c: C.blueD, a: 'center' });
+
+T(ctx, '串联：电流处处相同 → 电压按电阻"正比"分配。表头只留 1/' + k + '，剩下的全给 Rs。',
+110, 660, { s: 25, c: C.sub });
+
+cards(ctx,
+{ lab: '表头能扛的电压', val: '0.10', unit: 'V', c: C.red, sub: '永远只有这 0.1 V' },
+{ lab: '放大倍数　k = (Rg+Rs)/Rg', val: k, unit: '×', c: C.org, sub: '拖底部滑杆' },
+{ lab: '电压表量程', val: fmt(U, 2), unit: 'V', c: C.blueD, sub: '0.1 V × k' });
+}
+
+function scene4(ctx, st) {
+var k = st.k, Rp = 100 / (k - 1), I = 0.001 * k, Ip = I * (k - 1) / k;
+head(ctx, '第 4 幕', '电流表：把 ' + (k - 1) + '/' + k + ' 的电流交给并联电阻', '并联分流　I = Ig(1 + Rg/Rp)');
+
+var bx = 110, by = 92, bw = 1760, bh = 74;
+T(ctx, '总电流 I = ' + fmt(I * 1000, 2) + ' mA　—— 全部从这一条流过', bx, by - 14, { s: 22, w: 700, c: C.ink });
+var wS = shareBar(ctx, bx, by, bw, bh, 1 / k,
+'并联电阻 Rp 分走 ' + fmt(Ip * 1000, 2) + ' mA　（' + (k - 1) + '/' + k + '）');
+var lx = bx + wS / 2;
+line(ctx, lx, by + bh, lx, by + bh + 26, C.red, 2, [6, 5]);
+line(ctx, lx, by + bh + 26, bx + wS + 26, by + bh + 26, C.red, 2);
+T(ctx, '表头只走 1 mA　（1/' + k + '）', bx + wS + 34, by + bh + 20,
+{ s: 23, w: 700, c: C.red });
+
+var L = 170, R = 1600, ty = 356, byy = 600;
+var xa = 780, xb = 1180, dcy = (ty + byy) / 2;
+
+ctx.save(); ctx.setLineDash([11, 8]); ctx.strokeStyle = C.org; ctx.lineWidth = 2.4;
+rr(ctx, xa - 122, ty - 74, (xb + 132) - (xa - 122), (byy + 50) - (ty - 74), 16); ctx.stroke(); ctx.restore();
+T(ctx, '这两件并起来 = 一只 ' + fmt(I * 1000, 1) + ' mA 的电流表', xa - 122, ty - 86,
+{ s: 20, w: 700, c: C.org });
+
+line(ctx, L, ty, R, ty, C.ink, 4);
+line(ctx, L, byy, R, byy, C.ink, 4);
+line(ctx, L, ty, L, byy, C.ink, 4);
+line(ctx, R, ty, R, byy, C.ink, 4);
+
+ctx.save(); ctx.fillStyle = '#fff'; rr(ctx, L - 38, 436, 76, 84, 8); ctx.fill();
+ctx.strokeStyle = C.ink; ctx.lineWidth = 3; ctx.stroke(); ctx.restore();
+line(ctx, L - 18, 456, L + 18, 456, C.ink, 5);
+line(ctx, L - 10, 482, L + 10, 482, C.ink, 5);
+T(ctx, 'U', L - 60, 490, { s: 32, w: 700, c: C.org, a: 'right' });
+
+line(ctx, xa, ty, xa, byy, C.ink, 4);
+line(ctx, xb, ty, xb, byy, C.ink, 4);
+dot(ctx, xa, ty, 11, C.ink); dot(ctx, xb, ty, 11, C.ink);
+dot(ctx, xa, byy, 11, C.ink); dot(ctx, xb, byy, 11, C.ink);
+
+var dR = 66;
+ctx.save(); ctx.fillStyle = '#fff';
+ctx.beginPath(); ctx.arc(xa, dcy, dR + 8, 0, 7); ctx.fill(); ctx.restore();
+dial(ctx, xa, dcy, dR, 1, { name: 'G' });
+
+ctx.save(); ctx.fillStyle = '#fff'; ctx.fillRect(xb - 60, dcy - 68, 120, 136); ctx.restore();
+rr(ctx, xb - 56, dcy - 64, 112, 128, 12); ctx.fillStyle = '#fff'; ctx.fill();
+ctx.strokeStyle = C.blueD; ctx.lineWidth = 4.5; ctx.stroke();
+T(ctx, 'Rp', xb, dcy - 12, { s: 34, w: 700, c: C.blueD, a: 'center' });
+T(ctx, sig(Rp, 3) + ' Ω', xb, dcy + 20, { s: 19, w: 700, c: C.blueD, a: 'center' });
+
+arrow(ctx, 300, ty - 50, 540, ty - 50, C.ink, 4, 15);
+T(ctx, 'I = ' + fmt(I * 1000, 2) + ' mA', 312, ty - 64, { s: 23, w: 700, c: C.ink });
+
+T(ctx, 'Ig = 1 mA', xa - 84, dcy + 8, { s: 22, w: 700, c: C.red, a: 'right' });
+T(ctx, 'Ip = ' + fmt(Ip * 1000, 2) + ' mA', xb + 84, dcy + 8, { s: 22, w: 700, c: C.blueD });
+
+T(ctx, '并联：两支路电压相同 → 电流按电阻"反比"分配；表头只留 1/' + k + '，其余全从 Rp 走。',
+110, 678, { s: 24, c: C.sub });
+
+cards(ctx,
+{ lab: '表头能过的电流', val: '1', unit: 'mA', c: C.red, sub: '永远只有这 1 mA' },
+{ lab: '放大倍数　k = 1 + Rg/Rp', val: k, unit: '×', c: C.org, sub: '拖底部滑杆' },
+{ lab: '电流表量程', val: fmt(I * 1000, 1), unit: 'mA', c: C.blueD, sub: '1 mA × k' });
+}
+
+function scene5(ctx, st) {
+var k = st.k, U = 0.1 * k, I = 0.001 * k;
+head(ctx, '第 5 幕', '三件事，一个套路', '小量 × 一个比例 = 大量');
+
+var x0 = 56, labW = 292, colW = 494, gapp = 16;
+var cols = [x0 + labW, x0 + labW + colW + gapp, x0 + labW + 2 * (colW + gapp)];
+var heads = ['杆　秤', '电 压 表', '电 流 表'];
+var rows = [
+['只认识的小量', '秤砣　1 kg', '表头　0.10 V', '表头　1 mA'],
+['多的那份给了谁', '长力臂 L₂', '串联电阻 Rs', '并联电阻 Rp'],
+['放大倍数 k', 'L₂ / L₁ = ' + k, '(Rg+Rs) / Rg = ' + k, '1 + Rg/Rp = ' + k],
+['于是读出来的量', k + ' kg', fmt(U, 2) + ' V', fmt(I * 1000, 1) + ' mA'],
+['本质一句话', '力矩平衡', '串联分压', '并联分流']
+];
+var y0 = 104, hh = 84, rowH = 112;
+
+for (var c = 0; c < 3; c++) {
+ctx.save(); rr(ctx, cols[c], y0, colW, hh, 12);
+ctx.fillStyle = (c === 0 ? 'rgba(192,57,43,.13)' : 'rgba(52,152,219,.13)'); ctx.fill(); ctx.restore();
+T(ctx, heads[c], cols[c] + colW / 2, y0 + hh / 2 + 11,
+{ s: 30, w: 700, c: (c === 0 ? C.red : C.blueD), a: 'center' });
+}
+T(ctx, '对比项', x0 + 6, y0 + hh / 2 + 8, { s: 21, w: 700, c: C.weak });
+
+for (var i = 0; i < rows.length; i++) {
+var ry = y0 + hh + 4 + i * rowH;
+var isKey = (i === 3);
+if (isKey) {
+ctx.save(); rr(ctx, x0, ry - 4, 1808, rowH + 2, 12);
+ctx.fillStyle = 'rgba(230,126,34,.14)'; ctx.fill(); ctx.restore();
+}
+T(ctx, rows[i][0], x0 + 6, ry + rowH / 2 + 8, { s: 20, w: 700, c: C.sub });
+for (var c2 = 0; c2 < 3; c2++) {
+var col = (c2 === 0 ? C.red : C.blueD);
+if (i === 2) col = C.org;
+T(ctx, rows[i][c2 + 1], cols[c2] + colW / 2, ry + rowH / 2 + (isKey ? 15 : 10),
+{ s: isKey ? 37 : (i === 2 ? 28 : 24), w: 700, c: col, a: 'center' });
+}
+if (!isKey) line(ctx, x0, ry + rowH - 2, x0 + 1808, ry + rowH - 2, '#e9f0f9', 2);
+}
+
+var by = y0 + hh + 4 + rows.length * rowH + 6;
+ctx.save();
+ctx.shadowColor = 'rgba(0,0,0,.09)'; ctx.shadowBlur = 20; ctx.shadowOffsetY = 7;
+rr(ctx, x0, by, 1808, 112, 14); ctx.fillStyle = '#fff'; ctx.fill(); ctx.restore();
+rr(ctx, x0, by, 1808, 112, 14); ctx.strokeStyle = C.line; ctx.lineWidth = 2; ctx.stroke();
+var s1 = '三个都是同一件事：';
+T(ctx, s1, x0 + 30, by + 46, { s: 26, w: 700, c: C.ink });
+T(ctx, '让"小量"走表头，把"多的那份"交给另一个电阻（或另一段力臂），读数 × k 就是答案。',
+x0 + 30 + tw(ctx, s1, { s: 26, w: 700 }) + 8, by + 46, { s: 26, c: C.sub });
+T(ctx, '课本上电流表的 0.6 A 档，只是把 k 换成 600 而已 —— 套路一模一样。',
+x0 + 30, by + 84, { s: 21, c: C.weak });
+}
+
+var SCENES = [scene1, scene2, scene3, scene4, scene5];
+
+g.RENDER = {
+C: C,
+draw: function (ctx, st) {
+var gd = ctx.createLinearGradient(0, 0, 0, 900);
+gd.addColorStop(0, '#f0f5fc'); gd.addColorStop(1, '#ffffff');
+ctx.fillStyle = gd; ctx.fillRect(0, 0, 1920, 900);
+SCENES[st.idx](ctx, st);
+}
+};
+})(window);
+
+</script>
+<script>
+
+(function (g) {
+'use strict';
+g.STEPS = [
+{ idx: 0, act: '第 1 幕', nav: '① 杆秤', title: '杆秤：1 kg 的砣读出 30 kg',
+hint: '拖动底部 <b>放大倍数 k</b>，看秤砣往右滑多远、秤杆上的读数怎么跟着变',
+allow: { k: true }, k: 30 },
+{ idx: 1, act: '第 2 幕', nav: '② 表头', title: '表头：只会喊"满偏了"的小表',
+hint: '看这只小表的三个数：Ig = 1 mA、Rg = 100 Ω、Ug = Ig·Rg = 0.1 V —— 这就是它的全部本事',
+allow: {}, k: 30 },
+{ idx: 2, act: '第 3 幕', nav: '③ 电压表', title: '电压表：串联电阻把电压分走',
+hint: '拖动 <b>放大倍数 k</b>：串的电阻越大，表头只分到 1/k 的电压，量程就越大',
+allow: { k: true }, k: 30 },
+{ idx: 3, act: '第 4 幕', nav: '④ 电流表', title: '电流表：并联电阻把电流分走',
+hint: '拖动 <b>放大倍数 k</b>：并的电阻越小，分走的电流越多，表头只走 1/k，量程就越大',
+allow: { k: true }, k: 30 },
+{ idx: 4, act: '第 5 幕', nav: '⑤ 三张并排', title: '三件事，一个套路',
+hint: '左右对比着看：杆秤分的是"力矩"，电压表分的是"电压"，电流表分的是"电流" —— 套路完全一样',
+allow: {}, k: 30 }
+];
+})(window);
+
+</script>
+<script>
+
+(function (g) {
+'use strict';
+var cv = document.getElementById('cv');
+var ctx = cv.getContext('2d');
+var S = g.STEPS;
+var cur = 0, K = 30, kMin = 5, kMax = 60;
+
+var stage = document.getElementById('stage');
+var narrow = false;
+function fit() {
+var W = window.innerWidth, H = window.innerHeight;
+narrow = W < 900;
+var s = narrow ? W / 1920 : Math.min(W / 1920, H / 1080);
+stage.style.transform = 'scale(' + s + ')';
+stage.style.left = ((W - 1920 * s) / 2) + 'px';
+
+stage.style.top = (narrow ? 10 : (H - 1080 * s) / 2) + 'px';
+document.body.classList.toggle('narrow', narrow);
+
+stage.style.height = '1080px';
+stage.style.overflow = 'visible';
+document.body.style.height = '100%';
+var tip = document.getElementById('rotTip');
+if (tip) tip.style.display = (narrow && H > W) ? 'block' : 'none';
+}
+window.addEventListener('resize', fit);
+
+var toc = document.getElementById('toc');
+S.forEach(function (s, i) {
+var b = document.createElement('button');
+b.textContent = s.nav;
+b.onclick = function () { go(i); };
+toc.appendChild(b);
+});
+
+function state() {
+var k = K;
+return { idx: cur, k: k, M: g.PHY.syMass(1, 40, 40 * k) };
+}
+
+function draw() {
+var st = state();
+g.RENDER.draw(ctx, st);
+document.getElementById('stepn').textContent = (cur + 1) + ' / ' + S.length;
+document.getElementById('hint').innerHTML = S[cur].hint;
+document.getElementById('kVal').innerHTML = K + '<span>×</span>';
+var bs = toc.querySelectorAll('button');
+for (var i = 0; i < bs.length; i++) bs[i].className = (i === cur ? 'on' : '');
+}
+
+function go(i) {
+cur = Math.max(0, Math.min(S.length - 1, i));
+draw();
+}
+
+var rng = document.getElementById('kRange');
+function syncK() {
+rng.disabled = !(S[cur].allow && S[cur].allow.k);
+rng.style.opacity = rng.disabled ? .35 : 1;
+document.getElementById('kVal').style.opacity = rng.disabled ? .35 : 1;
+}
+rng.addEventListener('input', function () { K = +rng.value; draw(); });
+
+document.getElementById('btnPrev').onclick = function () { go(cur - 1); };
+document.getElementById('btnNext').onclick = function () { go(cur + 1); };
+document.addEventListener('keydown', function (e) {
+if (e.key === 'ArrowRight') go(cur + 1);
+if (e.key === 'ArrowLeft') go(cur - 1);
+});
+
+g.__viz = {
+selfTest: function () {
+var r = g.PHY.runSelfTest();
+
+var bad = [];
+S.forEach(function (s) {
+if (/放大倍数/.test(s.hint) && !(s.allow && s.allow.k)) bad.push(s.nav);
+});
+r.interactionMismatch = bad;
+r.pass = r.pass && bad.length === 0;
+return r;
+},
+go: go, setK: function (v) { K = Math.max(kMin, Math.min(kMax, Math.round(+v))); rng.value = K; draw(); },
+state: state
+};
+
+fit();
+syncK();
+draw();
+var _go = go;
+go = function (i) { _go(i); syncK(); };
+window.__vizGo = go;
+
+Array.prototype.forEach.call(toc.querySelectorAll('button'), function (b, i) {
+b.onclick = function () { go(i); };
+});
+document.getElementById('btnPrev').onclick = function () { go(cur - 1); };
+document.getElementById('btnNext').onclick = function () { go(cur + 1); };
+})(window);
+
+</script>
+</body>
+</html>
